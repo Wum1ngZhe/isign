@@ -16,7 +16,7 @@ class PlistAdapter(Adapter):
 
     def _decode(self, obj, context):
         return plistlib.readPlistFromString(obj)
-
+        
 # talk about overdesign.
 # magic is in the blob struct
 
@@ -124,6 +124,11 @@ Entitlement = Struct("Entitlement",
                      PlistAdapter(Bytes("data", lambda ctx: ctx['_']['length'] - 8)),
                      )
 
+EntitlementBinary = Struct("EntitlementBinary",
+                     # actually a plist
+                     Bytes("data", lambda ctx: ctx['_']['length'] - 8),
+                     )
+
 EntitlementsBlobIndex = Struct("BlobIndex",
                                Enum(UBInt32("type"),
                                     kSecHostRequirementType=1,
@@ -139,6 +144,7 @@ Entitlements = Struct("Entitlements",  # actually a kind of super blob
                       Anchor("sb_start"),
                       UBInt32("count"),
                       Array(lambda ctx: ctx['count'], EntitlementsBlobIndex),
+                      #	Probe(),
                       )
 
 BlobWrapper = Struct("BlobWrapper",
@@ -149,6 +155,7 @@ BlobIndex = Struct("BlobIndex",
                    UBInt32("type"),
                    UBInt32("offset"),
                    If(lambda ctx: ctx['offset'], Pointer(lambda ctx: ctx['_']['sb_start'] - 8 + ctx['offset'], Blob)),
+                   	Probe(),
                    )
 
 SuperBlob = Struct("SuperBlob",
@@ -163,11 +170,11 @@ Blob_ = Struct("Blob",
                     CSMAGIC_REQUIREMENTS=0xfade0c01,
                     CSMAGIC_CODEDIRECTORY=0xfade0c02,
                     CSMAGIC_ENTITLEMENT=0xfade7171,  # actually, this is kSecCodeMagicEntitlement, and not defined in the C version
+                    CSMAGIC_ENTITLEMENT_BINARY=0xfade7172,
                     CSMAGIC_BLOBWRAPPER=0xfade0b01,  # and this isn't even defined in libsecurity_codesigning; it's in _utilities
                     CSMAGIC_EMBEDDED_SIGNATURE=0xfade0cc0,
                     CSMAGIC_DETACHED_SIGNATURE=0xfade0cc1,
                     CSMAGIC_CODE_SIGN_DRS=0xfade0c05,
-                    _default_=Pass,
                     ),
                UBInt32("length"),
                Peek(Switch("data", lambda ctx: ctx['magic'],
@@ -175,6 +182,7 @@ Blob_ = Struct("Blob",
                             'CSMAGIC_REQUIREMENTS': Entitlements,
                             'CSMAGIC_CODEDIRECTORY': CodeDirectory,
                             'CSMAGIC_ENTITLEMENT': Entitlement,
+                            'CSMAGIC_ENTITLEMENT_BINARY' : EntitlementBinary,
                             'CSMAGIC_BLOBWRAPPER': BlobWrapper,
                             'CSMAGIC_EMBEDDED_SIGNATURE': SuperBlob,
                             'CSMAGIC_DETACHED_SIGNATURE': SuperBlob,

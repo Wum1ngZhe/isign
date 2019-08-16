@@ -7,6 +7,7 @@
 
 from abc import ABCMeta
 from codesig import (Codesig,
+										 EntitlementsBinarySlot,
                      EntitlementsSlot,
                      ResourceDirSlot,
                      RequirementsSlot,

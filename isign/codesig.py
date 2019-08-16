@@ -24,6 +24,15 @@ class CodeDirectorySlot(object):
         elif hash_algorithm == "sha256":
             return hashlib.sha256(self.get_contents()).digest()
 
+class EntitlementsBinarySlot(CodeDirectorySlot):
+    offset = -7
+
+    def get_contents(self):
+        blobs = self.codesig.get_blobs('CSMAGIC_ENTITLEMENT_BINARY', min_expected=1, max_expected=1)
+        return self.codesig.get_blob_data(blobs[0])
+    
+    def get_hash(self, hash_algorithm):
+        return '\x00' * 20
 
 class EntitlementsSlot(CodeDirectorySlot):
     offset = -5
@@ -205,6 +214,9 @@ class Codesig(object):
         for i, code_directory in enumerate(cd):
             # TODO: Is there a better way to figure out which hashing algorithm we should use?
             hash_algorithm = 'sha256' if i > 0 else 'sha1'
+            
+            if self.has_codedirectory_slot(EntitlementsBinarySlot, code_directory):
+                self.fill_codedirectory_slot(EntitlementsBinarySlot(self), code_directory, hash_algorithm)
 
             if self.has_codedirectory_slot(EntitlementsSlot, code_directory):
                 self.fill_codedirectory_slot(EntitlementsSlot(self), code_directory, hash_algorithm)
@@ -266,6 +278,7 @@ class Codesig(object):
 
     def update_offsets(self):
         # update section offsets, to account for any length changes
+        self.construct.data.BlobIndex = [blob for blob in self.construct.data.BlobIndex if blob.type != 7]
         offset = self.construct.data.BlobIndex[0].offset
         for blob in self.construct.data.BlobIndex:
             blob.offset = offset
