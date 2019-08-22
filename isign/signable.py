@@ -7,7 +7,7 @@
 
 from abc import ABCMeta
 from codesig import (Codesig,
-										 EntitlementsBinarySlot,
+					 EntitlementsBinarySlot,
                      EntitlementsSlot,
                      ResourceDirSlot,
                      RequirementsSlot,
@@ -262,7 +262,9 @@ class Signable(object):
 
 class Executable(Signable):
     """ The main executable of an app. """
-    slot_classes = [EntitlementsSlot,
+    slot_classes = [
+                    EntitlementsBinarySlot,
+                    EntitlementsSlot,
                     ResourceDirSlot,
                     RequirementsSlot,
                     ApplicationSlot,
@@ -283,7 +285,8 @@ class Dylib(Signable):
 
 class Appex(Signable):
     """ An app extension  """
-    slot_classes = [EntitlementsSlot,
+    slot_classes = [EntitlementsBinarySlot,
+                    EntitlementsSlot,
                     RequirementsSlot,
                     InfoSlot]
 

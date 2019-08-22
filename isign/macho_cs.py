@@ -155,13 +155,14 @@ BlobIndex = Struct("BlobIndex",
                    UBInt32("type"),
                    UBInt32("offset"),
                    If(lambda ctx: ctx['offset'], Pointer(lambda ctx: ctx['_']['sb_start'] - 8 + ctx['offset'], Blob)),
-                   	Probe(),
+                   #	Probe(),
                    )
 
 SuperBlob = Struct("SuperBlob",
                    Anchor("sb_start"),
                    UBInt32("count"),
                    Array(lambda ctx: ctx['count'], BlobIndex),
+                 #  Probe(),
                    )
 
 Blob_ = Struct("Blob",

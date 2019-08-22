@@ -31,8 +31,8 @@ class EntitlementsBinarySlot(CodeDirectorySlot):
         blobs = self.codesig.get_blobs('CSMAGIC_ENTITLEMENT_BINARY', min_expected=1, max_expected=1)
         return self.codesig.get_blob_data(blobs[0])
     
-    def get_hash(self, hash_algorithm):
-        return '\x00' * 20
+  #  def get_hash(self, hash_algorithm):
+   #     return '\x00' * 20
 
 class EntitlementsSlot(CodeDirectorySlot):
     offset = -5
@@ -46,7 +46,7 @@ class ApplicationSlot(CodeDirectorySlot):
     offset = -4
 
     def get_hash(self, hash_algorithm):
-        return '\x00' * 20
+        return '\x00' * (20 if hash_algorithm == 'sha1' else 32)
 
 
 class ResourceDirSlot(CodeDirectorySlot):
@@ -205,6 +205,7 @@ class Codesig(object):
     def fill_codedirectory_slot(self, slot, code_directory, hash_algorithm):
         if self.signable.should_fill_slot(self, slot):
             index = self.get_codedirectory_hash_index(slot, code_directory)
+            log.debug('Filling slot %s', type(slot).__name__)
             code_directory.data.hashes[index] = slot.get_hash(hash_algorithm)
 
     def set_codedirectories(self, seal_path, info_path, signer):
@@ -213,8 +214,8 @@ class Codesig(object):
 
         for i, code_directory in enumerate(cd):
             # TODO: Is there a better way to figure out which hashing algorithm we should use?
-            hash_algorithm = 'sha256' if i > 0 else 'sha1'
-            
+            hash_algorithm = 'sha256' if code_directory.data.hashType > 1 else 'sha1'
+            log.debug('Hash algorithm %s', hash_algorithm)
             if self.has_codedirectory_slot(EntitlementsBinarySlot, code_directory):
                 self.fill_codedirectory_slot(EntitlementsBinarySlot(self), code_directory, hash_algorithm)
 
@@ -244,7 +245,7 @@ class Codesig(object):
                 else:
                     code_directory.data.teamIDOffset += offset_change
                 code_directory.length += offset_change
-
+            
             code_directory.bytes = macho_cs.CodeDirectory.build(code_directory.data)
             # cd_data = macho_cs.Blob_.build(cd)
             # log.debug(len(cd_data))
@@ -278,7 +279,10 @@ class Codesig(object):
 
     def update_offsets(self):
         # update section offsets, to account for any length changes
-        self.construct.data.BlobIndex = [blob for blob in self.construct.data.BlobIndex if blob.type != 7]
+   #     elBin = next((blob for blob in self.construct.data.BlobIndex if blob.type == 7), None)
+   #     if elBin:
+   #         self.construct.data.BlobIndex = [blob for blob in self.construct.data.BlobIndex if blob.type != 7]
+   #         self.construct.data.count = self.construct.data.count - 1
         offset = self.construct.data.BlobIndex[0].offset
         for blob in self.construct.data.BlobIndex:
             blob.offset = offset
@@ -293,6 +297,7 @@ class Codesig(object):
         """ Do the actual signing. Create the structre and then update all the
             byte offsets """
         codedirs = self.get_blobs('CSMAGIC_CODEDIRECTORY', min_expected=1, max_expected=2)
+        #first thing first, remove the -7 slot and blob and everything...should be the last one anyway
 
         # TODO - the way entitlements are handled is a code smell
         # 1 - We're doing a hasattr to detect whether it's a top-level app. isinstance(App, bundle) ?
