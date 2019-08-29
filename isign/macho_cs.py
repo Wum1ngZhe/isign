@@ -8,14 +8,40 @@
 
 from construct import *
 import plistlib
+import logging
 
+from pyasn1.codec.der.decoder import decode
+from pyasn1.codec.der.encoder import encode
+import ents
+
+log = logging.getLogger(__name__)
+'''
+FOR NOW we do not use an adapter; instead, will handle localy
+'''
+class Asn1Adapter(Adapter):
+    def _encode(self, obj, context):
+        return encode(obj)
+
+    def _decode(self, obj, context):
+    #    log.info('Decoding obj %s : %s', type(obj), obj)
+        ent, rest = decode(obj, ents.Ents())
+    #    log.info('Decoded asn %s', type(ent))
+        #traceback.print_stack(file=sys.stdout)
+      #  for field in ent:
+       #     log.info('Key %s value %s', field['key'], field['val'])
+        return ent
 
 class PlistAdapter(Adapter):
     def _encode(self, obj, context):
         return plistlib.writePlistToString(obj)
 
     def _decode(self, obj, context):
-        return plistlib.readPlistFromString(obj)
+        obj = plistlib.readPlistFromString(obj)
+    #    log.info('Decoded xml %s', type(obj))
+      #  traceback.print_stack(file=sys.stdout)
+      #  for key in obj.keys():
+      #      log.info('Key %s value %s', key, obj[key])
+        return obj
         
 # talk about overdesign.
 # magic is in the blob struct
@@ -125,8 +151,8 @@ Entitlement = Struct("Entitlement",
                      )
 
 EntitlementBinary = Struct("EntitlementBinary",
-                     # actually a plist
-                     Bytes("data", lambda ctx: ctx['_']['length'] - 8),
+                     # actually a DER encoded entitlement
+                     Asn1Adapter(Bytes("data", lambda ctx: ctx['_']['length'] - 8)),
                      )
 
 EntitlementsBlobIndex = Struct("BlobIndex",

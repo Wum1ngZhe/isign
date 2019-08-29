@@ -4,6 +4,11 @@ import hashlib
 import logging
 import macho_cs
 
+import pyasn1
+from pyasn1.codec.der.encoder import encode
+import ents
+import plistlib
+
 import utils
 
 log = logging.getLogger(__name__)
@@ -113,6 +118,43 @@ class Codesig(object):
     def get_blob_data(self, blob):
         """ convenience method, if we just want the data """
         return macho_cs.Blob_.build(blob)
+        
+        
+    def set_binary_entitlements(self, entitlements_path):
+        try:
+            binary_ent_blobs = self.get_blobs('CSMAGIC_ENTITLEMENT_BINARY', min_expected=0, max_expected=1)
+        except KeyError:
+            # log.debug("no entitlements found")
+            pass
+        else:
+            if len(binary_ent_blobs) > 0:
+             #   log.info("We have binary blobs")
+                binaryEnt = binary_ent_blobs[0]
+               # print('{} debug with value {}'.format(type(binaryEnt.data.data), binaryEnt.data.data))
+             #   ent, rest = decoder.decode(binaryEnt.data.data, ents.Ents())
+                ent = binaryEnt.data.data
+            #    log.info('Decoded %s', type(ent))
+                xml = plistlib.readPlistFromString(open(entitlements_path, "rb").read())
+                for field in ent:
+                    aval = field['val'].getComponent()
+                    akey = field['key']
+                    xval = xml.get(akey)
+             #       log.info("Field val class %s comp class %s", type(field['val']), type(aval))
+             #       log.info("Original key %s val %s", akey, aval)
+                    if xval is not None:
+             #           log.info("New val %s class %s", xval, type(xval))
+                        if isinstance(aval, pyasn1.type.char.UTF8String):
+                            newVal = ''.join(xval) if isinstance(xval, list) else xval
+                            field['val'].setComponentByType(field['val'].effectiveTagSet, value=pyasn1.type.char.UTF8String(newVal))
+             #               log.info("Replaced with %s", field['val'])
+                        elif isinstance(aval, ents.ListValues):
+                            for i, xel in enumerate(xval):
+                                aval.setComponentByPosition(i, value=pyasn1.type.char.UTF8String(xel))
+        #        log.info("Modified %s", ent)
+                bts = encode(ent)
+                binaryEnt.bytes = bts
+                binaryEnt.length = len(binaryEnt.bytes) + 8
+    
 
     def set_entitlements(self, entitlements_path):
         # log.debug("entitlements:")
@@ -133,7 +175,7 @@ class Codesig(object):
             log.debug("using entitlements at path: {}".format(entitlements_path))
             entitlements.bytes = open(entitlements_path, "rb").read()
             entitlements.length = len(entitlements.bytes) + 8
-
+    
     def set_requirements(self, signer):
         # log.debug("requirements:")
         requirements_blobs = self.get_blobs('CSMAGIC_REQUIREMENTS', min_expected=1, max_expected=1)
@@ -306,6 +348,7 @@ class Codesig(object):
         # Possible refactor - make entitlements data part of Signer rather than Bundle?
         if hasattr(bundle, 'entitlements_path') and bundle.entitlements_path is not None:
             self.set_entitlements(bundle.entitlements_path)
+            self.set_binary_entitlements(bundle.entitlements_path)
         self.set_requirements(signer)
         # See docs/codedirectory.rst for some notes on optional hashes
         self.set_codedirectories(bundle.seal_path, bundle.info_path, signer)
