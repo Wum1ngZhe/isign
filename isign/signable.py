@@ -16,7 +16,9 @@ from codesig import (Codesig,
 import logging
 import macho
 from makesig import make_signature
+from os.path import basename, exists, join, splitext
 import os
+import biplist
 import tempfile
 import utils
 import shutil
@@ -28,6 +30,8 @@ class Signable(object):
     __metaclass__ = ABCMeta
 
     slot_classes = []
+    bundleId = ""
+    suffix = None
 
     def __init__(self, bundle, path, signer):
         log.debug("working on {0}".format(path))
@@ -42,9 +46,12 @@ class Signable(object):
 
         self.m = macho.MachoFile.parse_stream(self.f)
         self.sign_from_scratch = False
-
+        self.set_bundle_id()
         # may set sign_from_scratch to True
         self.arches = self._parse_arches()
+        
+    def set_bundle_id(self):
+        self.bundleId = self.get_bundle_id()
 
     def _parse_arches(self):
         """ parse architectures and associated Codesig """
@@ -170,6 +177,9 @@ class Signable(object):
         else:
             return None
 
+    def get_bundle_id(self):
+         return self.bundle.get_info_prop('CFBundleIdentifier')
+
     def sign(self, app, signer):
 
         temp = tempfile.NamedTemporaryFile('wb', delete=False)
@@ -289,6 +299,29 @@ class Appex(Signable):
                     EntitlementsSlot,
                     RequirementsSlot,
                     InfoSlot]
+    
+    def set_bundle_id(self):
+        exeName=os.path.basename(os.path.normpath(self.path))
+        self.suffix = "." + exeName
+        log.info('Exe name %s suffix %s', exeName, self.suffix)
+        tempBundleId = self.get_bundle_id()
+        self.bundleId = tempBundleId + '.' + exeName
+        log.info('Appex bundle id %s', self.bundleId)
+    
+    def update_info(self):
+        if self.get_changed_bundle_id():
+            info_path = join(os.path.dirname(self.path), 'Info.plist')
+            if not exists(info_path):
+                raise NotMatched("no Info.plist found; probably not a bundle")
+            info = biplist.readPlist(info_path)
+            info['CFBundleIdentifier']=self.bundleId
+            log.info('Updated Info.plist %s', info)
+            biplist.writePlist(info, info_path, binary=True)
+    
+    def sign(self, app, signer):
+        log.info('Sign appex!')
+        self.update_info()
+        super(Appex, self).sign(app, signer)
 
 
 class Framework(Signable):

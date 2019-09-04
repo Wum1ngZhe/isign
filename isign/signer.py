@@ -138,6 +138,7 @@ class Signer(object):
         with open(self.signer_cert_file, 'rb') as fh:
             cert = crypto.load_certificate(crypto.FILETYPE_PEM, fh.read())
         subject = cert.get_subject()
+        log.info('CN!! %s', dict(subject.get_components())['CN'])
         return dict(subject.get_components())['CN']
 
     def _log_parsed_asn1(self, data):

@@ -3,12 +3,14 @@ import construct
 import hashlib
 import logging
 import macho_cs
+import makesig
 
 import pyasn1
 from pyasn1.codec.der.encoder import encode
 import ents
 import plistlib
 
+import traceback
 import utils
 
 log = logging.getLogger(__name__)
@@ -140,13 +142,15 @@ class Codesig(object):
                     akey = field['key']
                     xval = xml.get(akey)
              #       log.info("Field val class %s comp class %s", type(field['val']), type(aval))
-             #       log.info("Original key %s val %s", akey, aval)
+                    log.info("Original key %s val %s", akey, aval)
                     if xval is not None:
-             #           log.info("New val %s class %s", xval, type(xval))
+                        log.info("New val %s class %s", xval, type(xval))
                         if isinstance(aval, pyasn1.type.char.UTF8String):
                             newVal = ''.join(xval) if isinstance(xval, list) else xval
+                            if akey == 'application-identifier' and self.signable.suffix is not None:
+                                newVal = newVal + self.signable.suffix
                             field['val'].setComponentByType(field['val'].effectiveTagSet, value=pyasn1.type.char.UTF8String(newVal))
-             #               log.info("Replaced with %s", field['val'])
+                            log.info("Replaced with %s", field['val'])
                         elif isinstance(aval, ents.ListValues):
                             for i, xel in enumerate(xval):
                                 aval.setComponentByPosition(i, value=pyasn1.type.char.UTF8String(xel))
@@ -173,8 +177,30 @@ class Codesig(object):
             # log.debug(hashlib.sha1(entitlements_data).hexdigest())
 
             log.debug("using entitlements at path: {}".format(entitlements_path))
-            entitlements.bytes = open(entitlements_path, "rb").read()
+            xml = plistlib.readPlistFromString(open(entitlements_path, "rb").read())
+            oldEntitlements = entitlements.data
+            for key in xml:
+                if key == 'application-identifier' and self.signable.suffix is not None:
+                    xml[key] = xml[key] + self.signable.suffix
+            log.info('NEW XML %s', xml)
+            entitlements.bytes = plistlib.writePlistToString(xml)
             entitlements.length = len(entitlements.bytes) + 8
+    
+    def set_bundleID(self, newId, req_blob_0):
+        prev = [req_blob_0.data.expr]
+        while prev:
+            expr = prev.pop()
+            log.info('Expr %s', expr)
+            op = expr.op
+            log.info('op %s', op)
+            if op == 'opAnd' or op == 'opOr':
+                prev.append(expr.data[0])
+                prev.append(expr.data[1])
+            elif op == 'opIdent':
+                log.info('elems %s class %s', expr, type(expr))
+                expr.data.data = newId
+                expr.data.length = len(expr.data.data)
+                
     
     def set_requirements(self, signer):
         # log.debug("requirements:")
@@ -182,49 +208,57 @@ class Codesig(object):
         requirements = requirements_blobs[0]
         # requirements_data = macho_cs.Blob_.build(requirements)
         # log.debug(hashlib.sha1(requirements_data).hexdigest())
-
-        signer_cn = signer.get_common_name()
-
-        # this is for convenience, a reference to the first blob
-        # structure within requirements, which contains the data
-        # we are going to change
         req_blob_0 = requirements.data.BlobIndex[0].blob
         req_blob_0_original_length = req_blob_0.length
-
-        if self.signable.get_changed_bundle_id():
-            # Set the bundle id if it changed
-            try:
-                bundle_struct = req_blob_0.data.expr.data[0].data
-                bundle_struct.data = self.signable.get_changed_bundle_id()
-                bundle_struct.length = len(bundle_struct.data)
-            except Exception:
-                log.debug("could not set bundle id")
-
+        signer_cn = signer.get_common_name()
+        
         try:
             cn = req_blob_0.data.expr.data[1].data[1].data[0].data[2].Data
         except Exception:
-            log.debug("no signer CN rule found in requirements")
+            log.info("no signer CN rule found in requirements. Redi")
             log.debug(requirements)
+            # here we insert an entire new expr since it is too hard to add leaf
+            expr = makesig.make_expr(
+                'And',
+                ('Ident', self.signable.bundleId),
+                ('AppleGenericAnchor',),
+                ('CertField', 'leafCert', 'subject.CN', ['matchEqual', signer_cn]),
+                ('CertGeneric', 1, '*\x86H\x86\xf7cd\x06\x02\x01', ['matchExists']))
+            des_req = construct.Container(kind=1, expr=expr)
+            des_req_data = macho_cs.Requirement.build(des_req)
+            requirements.data.BlobIndex[0].blob=construct.Container(magic='CSMAGIC_REQUIREMENT',
+                                                            length=len(des_req_data) + 8,
+                                                            data=des_req,
+                                                            bytes=des_req_data)
+            log.info('New requirements %s', requirements)
         else:
             # if we could find a signer CN rule, make requirements.
-
+            log.info('Req blob %s', req_blob_0)
+            self.set_bundleID(self.signable.bundleId, req_blob_0)
             # first, replace old signer CN with our own
             cn.data = signer_cn
             cn.length = len(cn.data)
 
-            # req_blob_0 contains that CN, so rebuild it, and get what
-            # the length is now
-            req_blob_0.bytes = macho_cs.Requirement.build(req_blob_0.data)
-            req_blob_0.length = len(req_blob_0.bytes) + 8
+        # this is for convenience, a reference to the first blob
+        # structure within requirements, which contains the data
+        # we are going to change
 
-            # fix offsets of later blobs in requirements
-            offset_delta = req_blob_0.length - req_blob_0_original_length
-            for bi in requirements.data.BlobIndex[1:]:
-                bi.offset += offset_delta
 
-            # rebuild requirements, and set length for whole thing
-            requirements.bytes = macho_cs.Entitlements.build(requirements.data)
-            requirements.length = len(requirements.bytes) + 8
+
+
+        # req_blob_0 contains that CN, so rebuild it, and get what
+        # the length is now
+        req_blob_0.bytes = macho_cs.Requirement.build(req_blob_0.data)
+        req_blob_0.length = len(req_blob_0.bytes) + 8
+
+        # fix offsets of later blobs in requirements
+        offset_delta = req_blob_0.length - req_blob_0_original_length
+        for bi in requirements.data.BlobIndex[1:]:
+            bi.offset += offset_delta
+
+        # rebuild requirements, and set length for whole thing
+        requirements.bytes = macho_cs.Entitlements.build(requirements.data)
+        requirements.length = len(requirements.bytes) + 8
 
         # then rebuild the whole data, but just to show the digest...?
         # requirements_data = macho_cs.Blob_.build(requirements)
