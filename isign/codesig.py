@@ -130,31 +130,27 @@ class Codesig(object):
             pass
         else:
             if len(binary_ent_blobs) > 0:
-             #   log.info("We have binary blobs")
                 binaryEnt = binary_ent_blobs[0]
                # print('{} debug with value {}'.format(type(binaryEnt.data.data), binaryEnt.data.data))
              #   ent, rest = decoder.decode(binaryEnt.data.data, ents.Ents())
                 ent = binaryEnt.data.data
-            #    log.info('Decoded %s', type(ent))
                 xml = plistlib.readPlistFromString(open(entitlements_path, "rb").read())
                 for field in ent:
                     aval = field['val'].getComponent()
                     akey = field['key']
                     xval = xml.get(akey)
-             #       log.info("Field val class %s comp class %s", type(field['val']), type(aval))
-                    log.info("Original key %s val %s", akey, aval)
+                    log.debug("Original key %s val %s", akey, aval)
                     if xval is not None:
-                        log.info("New val %s class %s", xval, type(xval))
+                        log.debug("New val %s class %s", xval, type(xval))
                         if isinstance(aval, pyasn1.type.char.UTF8String):
                             newVal = ''.join(xval) if isinstance(xval, list) else xval
                             if akey == 'application-identifier' and self.signable.suffix is not None:
                                 newVal = newVal + self.signable.suffix
                             field['val'].setComponentByType(field['val'].effectiveTagSet, value=pyasn1.type.char.UTF8String(newVal))
-                            log.info("Replaced with %s", field['val'])
+                            log.debug("Replaced with %s", field['val'])
                         elif isinstance(aval, ents.ListValues):
                             for i, xel in enumerate(xval):
                                 aval.setComponentByPosition(i, value=pyasn1.type.char.UTF8String(xel))
-        #        log.info("Modified %s", ent)
                 bts = encode(ent)
                 binaryEnt.bytes = bts
                 binaryEnt.length = len(binaryEnt.bytes) + 8
@@ -182,7 +178,7 @@ class Codesig(object):
             for key in xml:
                 if key == 'application-identifier' and self.signable.suffix is not None:
                     xml[key] = xml[key] + self.signable.suffix
-            log.info('NEW XML %s', xml)
+            log.debug('NEW XML %s', xml)
             entitlements.bytes = plistlib.writePlistToString(xml)
             entitlements.length = len(entitlements.bytes) + 8
     
@@ -190,14 +186,14 @@ class Codesig(object):
         prev = [req_blob_0.data.expr]
         while prev:
             expr = prev.pop()
-            log.info('Expr %s', expr)
+            log.debug('Expr %s', expr)
             op = expr.op
-            log.info('op %s', op)
+            log.debug('op %s', op)
             if op == 'opAnd' or op == 'opOr':
                 prev.append(expr.data[0])
                 prev.append(expr.data[1])
             elif op == 'opIdent':
-                log.info('elems %s class %s', expr, type(expr))
+                log.debug('elems %s class %s', expr, type(expr))
                 expr.data.data = newId
                 expr.data.length = len(expr.data.data)
                 
@@ -215,7 +211,7 @@ class Codesig(object):
         try:
             cn = req_blob_0.data.expr.data[1].data[1].data[0].data[2].Data
         except Exception:
-            log.info("no signer CN rule found in requirements. Redi")
+            log.debug("no signer CN rule found in requirements. Redi")
             log.debug(requirements)
             # here we insert an entire new expr since it is too hard to add leaf
             expr = makesig.make_expr(
@@ -230,10 +226,10 @@ class Codesig(object):
                                                             length=len(des_req_data) + 8,
                                                             data=des_req,
                                                             bytes=des_req_data)
-            log.info('New requirements %s', requirements)
+            log.debug('New requirements %s', requirements)
         else:
             # if we could find a signer CN rule, make requirements.
-            log.info('Req blob %s', req_blob_0)
+            log.debug('Req blob %s', req_blob_0)
             self.set_bundleID(self.signable.bundleId, req_blob_0)
             # first, replace old signer CN with our own
             cn.data = signer_cn
