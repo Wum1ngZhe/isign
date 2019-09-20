@@ -233,6 +233,7 @@ def make_seal(source_app_path, target_dir=None):
     """
     if target_dir is None:
         target_dir = os.path.dirname(source_app_path)
+    log.debug('Make seal at app path %s target dir %s', source_app_path, target_dir)
     template = get_template()
     # n.b. code_resources_template not only contains a template of
     # what the file should look like; it contains default rules

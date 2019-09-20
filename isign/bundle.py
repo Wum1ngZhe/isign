@@ -39,6 +39,7 @@ class Bundle(object):
     helpers = []
     signable_class = None
     entitlements_path = None  # Not set for every bundle type
+    info_path = None
 
     def __init__(self, path):
         self.path = path
@@ -69,6 +70,22 @@ class Bundle(object):
             raise Exception(
                 'could not find executable for {0}'.format(self.path))
         return executable
+        
+    def update_appex_info_props(self, new_props):
+        if ('CFBundleIdentifier' in new_props) :
+            plugins_path = join(self.path, 'PlugIns')
+            new_main_bundle_id = new_props['CFBundleIdentifier']
+            if exists(plugins_path):
+                appex_paths = glob.glob(join(plugins_path, '*.appex'))
+                for appex_path in appex_paths:
+                    plist_path = join(appex_path, 'Info.plist')
+                    if not exists(plist_path):
+                        continue
+                    plist = biplist.readPlist(plist_path)
+                    exeName = plist['CFBundleExecutable']
+                    newBundleId = new_main_bundle_id + '.' + exeName
+                    plist['CFBundleIdentifier'] = newBundleId
+                    biplist.writePlist(plist, plist_path, binary=True)
 
     def update_info_props(self, new_props):
         if self.orig_info is None:
@@ -90,16 +107,19 @@ class Bundle(object):
                     url_type['CFBundleURLName'] = new_bundle_id
                     changed = True
 
-        for key, val in new_props.iteritems():
+        for key, val in new_props.items():
             is_new_key = key not in self.info
             if is_new_key or self.info[key] != val:
                 if is_new_key:
                     log.warn("Adding new Info.plist key: {}".format(key))
                 self.info[key] = val
                 changed = True
-
+        if 'UISupportedDevices' in self.info :
+            self.info.pop('UISupportedDevices')
+            changed = True
         if changed:
             biplist.writePlist(self.info, self.info_path, binary=True)
+            self.update_info_props(new_props)
         else:
             self.orig_info = None
 
@@ -156,7 +176,9 @@ class Bundle(object):
                     continue
                 plist = biplist.readPlist(plist_path)
                 appex_exec_path = join(appex_path, plist['CFBundleExecutable'])
-                appex = signable.Appex(self, appex_exec_path, signer)
+                seal_path = code_resources.make_seal(appex_exec_path, appex_path)
+                log.debug("Info path {} seal_path {}".format(plist_path, seal_path))
+                appex = signable.Appex(self, appex_exec_path, signer, info_path=plist_path, seal_path=seal_path)
                 appex.sign(self, signer)
 
         # then create the seal
@@ -164,7 +186,7 @@ class Bundle(object):
         self.seal_path = code_resources.make_seal(self.get_executable_path(),
                                                   self.path)
         # then sign the app
-        executable = self.signable_class(self, self.get_executable_path(), signer)
+        executable = self.signable_class(self, self.get_executable_path(), signer, info_path=self.info_path, seal_path=self.seal_path)
         executable.sign(self, signer)
 
     def resign(self, signer):
@@ -218,7 +240,7 @@ class App(Bundle):
         ]
         # this command always prints 'Verification successful' to stderr.
         (profile_text, err) = openssl_command(cmd, data=None, expect_err=True)
-        if err and err.strip() != 'Verification successful':
+        if err and err.strip() != b'Verification successful':
             log.error('Received unexpected error from openssl: {}'.format(err))
         plist_dict = biplist.readPlistFromString(profile_text)
         if 'Entitlements' not in plist_dict:

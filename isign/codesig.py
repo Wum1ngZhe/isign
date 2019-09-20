@@ -173,13 +173,7 @@ class Codesig(object):
             # log.debug(hashlib.sha1(entitlements_data).hexdigest())
 
             log.debug("using entitlements at path: {}".format(entitlements_path))
-            xml = plistlib.readPlistFromString(open(entitlements_path, "rb").read())
-            oldEntitlements = entitlements.data
-            for key in xml:
-                if key == 'application-identifier' and self.signable.suffix is not None:
-                    xml[key] = xml[key] + self.signable.suffix
-            log.debug('NEW XML %s', xml)
-            entitlements.bytes = plistlib.writePlistToString(xml)
+            entitlements.bytes = open(entitlements_path, "rb").read()
             entitlements.length = len(entitlements.bytes) + 8
     
     def set_bundleID(self, newId, req_blob_0):
@@ -283,10 +277,12 @@ class Codesig(object):
     def set_codedirectories(self, seal_path, info_path, signer):
         cd = self.get_blobs('CSMAGIC_CODEDIRECTORY', min_expected=1, max_expected=2)
         changed_bundle_id = self.signable.get_changed_bundle_id()
+        
+        hash_size_sha_mapping = {32: 'sha256', 20 : 'sha1'}
 
         for i, code_directory in enumerate(cd):
             # TODO: Is there a better way to figure out which hashing algorithm we should use?
-            hash_algorithm = 'sha256' if code_directory.data.hashType > 1 else 'sha1'
+            hash_algorithm = hash_size_sha_mapping.get(code_directory.data.hashSize)
             log.debug('Hash algorithm %s', hash_algorithm)
             if self.has_codedirectory_slot(EntitlementsBinarySlot, code_directory):
                 self.fill_codedirectory_slot(EntitlementsBinarySlot(self), code_directory, hash_algorithm)
@@ -364,12 +360,18 @@ class Codesig(object):
         superblob = macho_cs.SuperBlob.build(self.construct.data)
         self.construct.length = len(superblob) + 8
         self.construct.bytes = superblob
+        
+    def can_resign(self):
+        codedirs = self.get_blobs('CSMAGIC_CODEDIRECTORY', min_expected=1, max_expected=2)
+        code_directory = codedirs[0]
+        if code_directory.data.version >= 0x20500 :
+            return False
+        return True
 
-    def resign(self, bundle, signer):
+    def resign(self, bundle, signer,info_path,  seal_path):
         """ Do the actual signing. Create the structre and then update all the
             byte offsets """
         codedirs = self.get_blobs('CSMAGIC_CODEDIRECTORY', min_expected=1, max_expected=2)
-        #first thing first, remove the -7 slot and blob and everything...should be the last one anyway
 
         # TODO - the way entitlements are handled is a code smell
         # 1 - We're doing a hasattr to detect whether it's a top-level app. isinstance(App, bundle) ?
@@ -381,7 +383,7 @@ class Codesig(object):
             self.set_binary_entitlements(bundle.entitlements_path)
         self.set_requirements(signer)
         # See docs/codedirectory.rst for some notes on optional hashes
-        self.set_codedirectories(bundle.seal_path, bundle.info_path, signer)
+        self.set_codedirectories(seal_path, info_path, signer)
         self.set_signature(signer)
         self.update_offsets()
 

@@ -15,7 +15,7 @@ from codesig import (Codesig,
                      InfoSlot)
 import logging
 import macho
-from makesig import make_signature
+from makesig import make_signature, replace_signature
 from os.path import basename, exists, join, splitext
 import os
 import biplist
@@ -30,14 +30,17 @@ class Signable(object):
     __metaclass__ = ABCMeta
 
     slot_classes = []
-    bundleId = ""
     suffix = None
+    bundleId = None
 
-    def __init__(self, bundle, path, signer):
-        log.debug("working on {0}".format(path))
+    def __init__(self, bundle, path, signer, info_path=None, seal_path=None):
+        log.info("working on {0}".format(path))
+        log.debug("Info path {} seal_path {}".format(info_path, seal_path))
         self.bundle = bundle
         self.path = path
         self.signer = signer
+        self.info_path = info_path
+        self.seal_path = seal_path
 
         self.f = open(self.path, "rb")
         self.f.seek(0, os.SEEK_END)
@@ -46,12 +49,10 @@ class Signable(object):
 
         self.m = macho.MachoFile.parse_stream(self.f)
         self.sign_from_scratch = False
-        self.set_bundle_id()
+        if self.bundleId is None :
+            self.bundleId = self.get_bundle_id()
         # may set sign_from_scratch to True
         self.arches = self._parse_arches()
-        
-    def set_bundle_id(self):
-        self.bundleId = self.get_bundle_id()
 
     def _parse_arches(self):
         """ parse architectures and associated Codesig """
@@ -75,12 +76,43 @@ class Signable(object):
                                          self.file_end))
 
         return arches
+        
+    def create_sign_from_scratch(self, arch, arch_offset, arch_size):
+        log.info("signing from scratch!")
+        self.sign_from_scratch = True
+        entitlements_file = self.bundle.get_entitlements_path()  # '/path/to/some/entitlements.plist'
+        macho = arch['macho']
+        # Stage 1: Fake signature
+        fake_codesig_data = make_signature(macho, arch_offset, arch_size, arch['cmds'], self.f, entitlements_file,
+                                           0, self.signer, self.bundleId)
 
-    def _get_arch(self, macho, arch_offset, arch_size):
-        arch = {'macho': macho, 'arch_offset': arch_offset, 'arch_size': arch_size}
+        # We're stripping out the fake LC_CODE_SIGNATURE command, which we know has a size of 16, so we need to
+        # decrement the overall sizeofcmds
+        macho.ncmds -= 1
+        macho.commands = macho.commands[:-1]
+        macho.sizeofcmds -= 16
+
+        # Get the length
+        fake_codesig = Codesig(self, fake_codesig_data)
+        fake_codesig.set_signature(self.signer)
+        fake_codesig.update_offsets()
+        fake_codesig_length = len(fake_codesig.build_data())
+
+        log.debug("fake codesig length: {}".format(fake_codesig_length))
+
+        # stage 2: real signature
+        codesig_data = make_signature(macho, arch_offset, arch_size, arch['cmds'], self.f, entitlements_file,
+                                      fake_codesig_length, self.signer,
+                                      self.bundleId)
+
+        arch['lc_codesig'] = arch['cmds']['LC_CODE_SIGNATURE']
+        return codesig_data       
+
+    def _get_arch(self, arch_macho, arch_offset, arch_size):
+        arch = {'macho': arch_macho, 'arch_offset': arch_offset, 'arch_size': arch_size}
 
         arch['cmds'] = {}
-        for cmd in macho.commands:
+        for cmd in arch_macho.commands:
             name = cmd.cmd
             arch['cmds'][name] = cmd
 
@@ -91,40 +123,43 @@ class Signable(object):
             codesig_offset = arch['macho'].macho_start + arch['lc_codesig'].data.dataoff
             self.f.seek(codesig_offset)
             codesig_data = self.f.read(arch['lc_codesig'].data.datasize)
+            codesign_length = arch['lc_codesig'].data.datasize
             # log.debug("codesig len: {0}".format(len(codesig_data)))
+            codesgn = Codesig(self, codesig_data) 
+            canResign = codesgn.can_resign()
+            log.info('Can sign? %s', canResign)
+            if canResign is False :                
+                arch_macho.ncmds -= 1
+                arch_macho.commands = arch_macho.commands[:-1]
+                arch_macho.sizeofcmds -= 16
+                #decrease the arch_size to remove previous code_sign
+                arch_size = codesig_offset - arch_offset
+                arch['arch_size'] = arch_size
+                for lc in arch_macho.commands:
+                    if lc.cmd == 'LC_SEGMENT_64' or lc.cmd == 'LC_SEGMENT':
+                        if lc.data.segname == '__LINKEDIT':
+                            log.debug("found __LINKEDIT, old filesize {}, vmsize {}".format(lc.data.filesize, lc.data.vmsize))
+        
+                            lc.data.filesize = lc.data.filesize - codesign_length
+                            log.debug("new filesize {}, vmsize {}".format(lc.data.filesize, lc.data.vmsize))
+                          #  if (lc.data.filesize > lc.data.vmsize):
+                          #  lc.data.vmsize = utils.round_up(lc.data.filesize, 4096)
+        
+                            if lc.cmd == 'LC_SEGMENT_64':
+                                lc.bytes = macho.Segment64.build(lc.data)
+                            else:
+                                lc.bytes = macho.Segment.build(lc.data)
+        
+                           
+            codesig_data = self.create_sign_from_scratch(arch, arch_offset, arch_size) 
         else:
-            log.info("signing from scratch!")
-            self.sign_from_scratch = True
-            entitlements_file = self.bundle.get_entitlements_path()  # '/path/to/some/entitlements.plist'
+           codesig_data = self.create_sign_from_scratch(arch, arch_offset, arch_size) 
 
-            # Stage 1: Fake signature
-            fake_codesig_data = make_signature(macho, arch_offset, arch_size, arch['cmds'], self.f, entitlements_file,
-                                               0, self.signer, self.bundle.get_info_prop('CFBundleIdentifier'))
-
-            # We're stripping out the fake LC_CODE_SIGNATURE command, which we know has a size of 16, so we need to
-            # decrement the overall sizeofcmds
-            macho.ncmds -= 1
-            macho.commands = macho.commands[:-1]
-            macho.sizeofcmds -= 16
-
-            # Get the length
-            fake_codesig = Codesig(self, fake_codesig_data)
-            fake_codesig.set_signature(self.signer)
-            fake_codesig.update_offsets()
-            fake_codesig_length = len(fake_codesig.build_data())
-
-            log.debug("fake codesig length: {}".format(fake_codesig_length))
-
-            # stage 2: real signature
-            codesig_data = make_signature(macho, arch_offset, arch_size, arch['cmds'], self.f, entitlements_file,
-                                          fake_codesig_length, self.signer,
-                                          self.bundle.get_info_prop('CFBundleIdentifier'))
-
-            arch['lc_codesig'] = arch['cmds']['LC_CODE_SIGNATURE']
-
+        codesgn = Codesig(self, codesig_data) 
+        canResign = codesgn.can_resign()
+            
         arch['codesig'] = Codesig(self, codesig_data)
-        arch['codesig_len'] = len(codesig_data)
-
+        arch['codesig_len'] = len(codesig_data)    
         if self.sign_from_scratch:
             arch['codesig_data'] = codesig_data
 
@@ -132,7 +167,7 @@ class Signable(object):
 
     def _sign_arch(self, arch, app, signer):
         # Returns slice-relative offset, code signature blob
-        arch['codesig'].resign(app, signer)
+        arch['codesig'].resign(app, signer, self.info_path, self.seal_path)
 
         new_codesig_data = arch['codesig'].build_data()
         new_codesig_len = len(new_codesig_data)
@@ -140,7 +175,7 @@ class Signable(object):
 
         padding_length = arch['codesig_len'] - new_codesig_len
         new_codesig_data += "\x00" * padding_length
-        # log.debug("padded len: {0}".format(len(new_codesig_data)))
+        log.info("padded len: {0}".format(len(new_codesig_data)))
         # log.debug("----")
 
         cmd = arch['lc_codesig']
@@ -273,7 +308,7 @@ class Signable(object):
 class Executable(Signable):
     """ The main executable of an app. """
     slot_classes = [
-                    EntitlementsBinarySlot,
+                  #  EntitlementsBinarySlot,
                     EntitlementsSlot,
                     ResourceDirSlot,
                     RequirementsSlot,
@@ -295,32 +330,23 @@ class Dylib(Signable):
 
 class Appex(Signable):
     """ An app extension  """
-    slot_classes = [EntitlementsBinarySlot,
+    slot_classes = [#EntitlementsBinarySlot,
                     EntitlementsSlot,
+                    ResourceDirSlot,
                     RequirementsSlot,
                     InfoSlot]
-    
-    def set_bundle_id(self):
-        exeName=os.path.basename(os.path.normpath(self.path))
+                 
+    def __init__(self, bundle, path, signer, info_path,  seal_path):
+        exeName=os.path.basename(os.path.normpath(path))
         self.suffix = "." + exeName
         log.info('Exe name %s suffix %s', exeName, self.suffix)
-        tempBundleId = self.get_bundle_id()
+        tempBundleId = bundle.get_info_prop('CFBundleIdentifier')
         self.bundleId = tempBundleId + '.' + exeName
         log.info('Appex bundle id %s', self.bundleId)
-    
-    def update_info(self):
-        if self.get_changed_bundle_id():
-            info_path = join(os.path.dirname(self.path), 'Info.plist')
-            if not exists(info_path):
-                raise NotMatched("no Info.plist found; probably not a bundle")
-            info = biplist.readPlist(info_path)
-            info['CFBundleIdentifier']=self.bundleId
-            log.info('Updated Info.plist %s', info)
-            biplist.writePlist(info, info_path, binary=True)
-    
+        super(Appex, self).__init__(bundle, path, signer, info_path, seal_path)
+            
     def sign(self, app, signer):
         log.info('Sign appex!')
-        self.update_info()
         super(Appex, self).sign(app, signer)
 
 

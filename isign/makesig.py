@@ -191,6 +191,118 @@ def make_basic_codesig(entitlements_file, drs, code_limit, hashes, signer, ident
     return macho_cs.Blob.parse(chunk)
 
 
+def replace_signature(arch_macho, arch_offset, arch_size, cmds, f, entitlements_file, signer, ident):
+    # NB: arch_offset is absolute in terms of file start.  Everything else is relative to arch_offset!
+
+    # sign from scratch
+    log.debug("replacing signature")
+
+    drs = None
+    drs_lc = cmds.get('LC_DYLIB_CODE_SIGN_DRS')
+    if drs_lc:
+        drs = drs_lc.data.blob
+    cmd = cmds.get('LC_CODE_SIGNATURE')
+    codesig_offset = arch_offset + cmd.data.dataoff
+
+    # generate code hashes
+    #log.info("codesig offset: {}".format(codesig_offset))
+    codeLimit = codesig_offset
+    log.debug("new cL: {}".format(hex(codeLimit)))
+    nCodeSlots = int(math.ceil(float(codesig_offset) / 0x1000))
+    log.debug("new nCS: {}".format(nCodeSlots))
+
+
+    # generate placeholder LC_CODE_SIGNATURE (like what codesign_allocate does)
+    fake_hashes = ["\x00" * 20]*nCodeSlots
+
+    codesig_cons = make_basic_codesig(entitlements_file,
+            drs,
+            codeLimit,
+            fake_hashes,
+            signer,
+            ident)
+    codesig_data = macho_cs.Blob.build(codesig_cons)
+    oldDataSize = cmd.data.datasize
+    codesig_data_length =  len(codesig_data)
+    
+    cmd_data = construct.Container(dataoff=codesig_offset,
+            datasize=codesig_data_length)
+    cmd = construct.Container(cmd='LC_CODE_SIGNATURE',
+            cmdsize=16,
+            data=cmd_data,
+            bytes=macho.CodeSigRef.build(cmd_data))
+    arch_macho.commands[-1] = cmd
+    cmds['LC_CODE_SIGNATURE'] = cmd
+      
+    log.debug("CS blob before: {}".format(utils.print_structure(codesig_cons, macho_cs.Blob)))
+    log.debug("len(codesig_data): {}".format(len(codesig_data)))
+
+    codesig_length = codesig_data_length
+    log.debug("codesig length: {}".format(codesig_length))
+
+
+    hashes = []
+    if codesig_data_length > 0:
+        # Patch __LINKEDIT
+        for lc in arch_macho.commands:
+            if lc.cmd == 'LC_SEGMENT_64' or lc.cmd == 'LC_SEGMENT':
+                if lc.data.segname == '__LINKEDIT':
+                    log.debug("found __LINKEDIT, old filesize {}, vmsize {}".format(lc.data.filesize, lc.data.vmsize))
+
+                    lc.data.filesize = utils.round_up(lc.data.filesize, 16) + codesig_length
+                    if (lc.data.filesize > lc.data.vmsize):
+                        lc.data.vmsize = utils.round_up(lc.data.filesize, 4096)
+
+                    if lc.cmd == 'LC_SEGMENT_64':
+                        lc.bytes = macho.Segment64.build(lc.data)
+                    else:
+                        lc.bytes = macho.Segment.build(lc.data)
+
+                    log.debug("new filesize {}, vmsize {}".format(lc.data.filesize, lc.data.vmsize))
+
+
+        actual_data = macho.MachO.build(arch_macho)
+        log.debug("actual_data length with codesig LC {}".format(len(actual_data)))
+
+        # Now seek to the start of the actual data and read until the end of the arch.
+        f.seek(arch_offset + len(actual_data))
+        bytes_to_read = codesig_offset + arch_offset - f.tell()
+        file_slice = f.read(bytes_to_read)
+        if len(file_slice) < bytes_to_read:
+            log.warn("expected {} bytes but got {}, zero padding.".format(bytes_to_read, len(file_slice)))
+            file_slice += ("\x00" * (bytes_to_read - len(file_slice)))
+        actual_data += file_slice
+
+        for i in xrange(nCodeSlots):
+            actual_data_slice = actual_data[(0x1000 * i):(0x1000 * i + 0x1000)]
+
+            actual = hashlib.sha1(actual_data_slice).digest()
+            log.debug("Slot {} (File page @{}): {}".format(i, hex(0x1000 * i), actual.encode('hex')))
+            hashes.append(actual)
+    else:
+        hashes = fake_hashes
+
+    # Replace placeholder with real one.
+    codesig_cons = make_basic_codesig(entitlements_file,
+            drs,
+            codeLimit,
+            hashes,
+            signer,
+            ident)
+    codesig_data = macho_cs.Blob.build(codesig_cons)
+    padding_length = oldDataSize - len(codesig_data)
+    if padding_length > 0:
+        codesig_data += "\x00" * padding_length
+    cmd_data = construct.Container(dataoff=codesig_offset,
+            datasize=len(codesig_data))
+    cmd = construct.Container(cmd='LC_CODE_SIGNATURE',
+            cmdsize=16,
+            data=cmd_data,
+            bytes=macho.CodeSigRef.build(cmd_data))
+    arch_macho.commands[-1] = cmd
+    cmds['LC_CODE_SIGNATURE'] = cmd
+    return codesig_data
+
 def make_signature(arch_macho, arch_offset, arch_size, cmds, f, entitlements_file, codesig_data_length, signer, ident):
     # NB: arch_offset is absolute in terms of file start.  Everything else is relative to arch_offset!
 
