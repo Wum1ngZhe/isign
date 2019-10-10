@@ -337,11 +337,12 @@ class Appex(Signable):
                     InfoSlot]
                  
     def __init__(self, bundle, path, signer, info_path,  seal_path):
-        exeName=os.path.basename(os.path.normpath(path))
-        self.suffix = "." + exeName
-        log.info('Exe name %s suffix %s', exeName, self.suffix)
+        plist = biplist.readPlist(info_path)
+        appexName = plist['CFBundleIdentifier'].split('.')[-1]
+        self.suffix = "." + appexName
+        log.info('Appex name %s suffix %s', appexName, self.suffix)
         tempBundleId = bundle.get_info_prop('CFBundleIdentifier')
-        self.bundleId = tempBundleId + '.' + exeName
+        self.bundleId = tempBundleId + '.' + appexName
         log.info('Appex bundle id %s', self.bundleId)
         super(Appex, self).__init__(bundle, path, signer, info_path, seal_path)
             
