@@ -66,7 +66,7 @@ def get_watchkit_paths(root_bundle_path):
     return watchkit_paths
 
 
-def process_watchkit(root_bundle_path, should_remove=False):
+def process_watchkit(root_bundle_path, should_remove=True):
     """ Unfortunately, we currently can't sign WatchKit. If you don't
         care about watchkit functionality, it is
         generally harmless to remove it, so that's the default.

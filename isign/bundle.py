@@ -263,10 +263,9 @@ class App(Bundle):
         # and then embed it into Signer?
 
         # In the typical case, we add entitlements from the pprof into the app's signature
+        self.provision(provisioning_profile)
         if alternate_entitlements_path is None:
             # copy the provisioning profile in
-            self.provision(provisioning_profile)
-
             entitlements = self.extract_entitlements(provisioning_profile)
             log.info("extracting entitlements %s" , entitlements)
         else:
