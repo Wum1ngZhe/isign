@@ -21,7 +21,6 @@ from signer import openssl_command
 import signable
 import shutil
 
-
 log = logging.getLogger(__name__)
 
 
@@ -268,10 +267,12 @@ class App(Bundle):
             # copy the provisioning profile in
             entitlements = self.extract_entitlements(provisioning_profile)
             log.info("extracting entitlements %s" , entitlements)
+            self.write_entitlements(entitlements)
         else:
             log.info("signing with alternative entitlements: {}".format(alternate_entitlements_path))
-            entitlements = biplist.readPlist(alternate_entitlements_path)
-        self.write_entitlements(entitlements)
+            #entitlements = biplist.readPlist(alternate_entitlements_path)
+            shutil.copyfile(alternate_entitlements_path, self.entitlements_path)
+        
 
         # actually resign this bundle now
         super(App, self).resign(signer)
