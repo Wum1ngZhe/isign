@@ -14,6 +14,9 @@ from pyasn1.codec.der.decoder import decode
 from pyasn1.codec.der.encoder import encode
 import ents
 
+SHA1_HASHTYPE = 1
+SHA256_HASHTYPE = 2
+
 log = logging.getLogger(__name__)
 '''
 FOR NOW we do not use an adapter; instead, will handle localy
