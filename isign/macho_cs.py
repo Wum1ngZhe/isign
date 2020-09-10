@@ -14,6 +14,9 @@ from pyasn1.codec.der.decoder import decode
 from pyasn1.codec.der.encoder import encode
 import ents
 
+SHA1_HASHTYPE = 1
+SHA256_HASHTYPE = 2
+
 log = logging.getLogger(__name__)
 '''
 FOR NOW we do not use an adapter; instead, will handle localy
@@ -63,13 +66,19 @@ CodeDirectory = Struct("CodeDirectory",
                        UBInt32("codeLimit"),
                        UBInt8("hashSize"),
                        UBInt8("hashType"),
-                       UBInt8("spare1"),
+                       UBInt8("platform"),
                        UBInt8("pageSize"),
                        UBInt32("spare2"),
+                       UBInt32("scatterOffset"),
+                       UBInt32("teamIDOffset"),
                        Pointer(lambda ctx: ctx['cd_start'] - 8 + ctx['identOffset'], CString('ident')),
-                       If(lambda ctx: ctx['version'] >= 0x20100, UBInt32("scatterOffset")),
-                       If(lambda ctx: ctx['version'] >= 0x20200, UBInt32("teamIDOffset")),
-                       If(lambda ctx: ctx['version'] >= 0x20200, Pointer(lambda ctx: ctx['cd_start'] - 8 + ctx['teamIDOffset'], CString('teamID'))),
+
+                       If(lambda ctx: ctx['version'] >= 0x20300, UBInt32("spare3")),
+                       If(lambda ctx: ctx['version'] >= 0x20300, UBInt64("codeLimit64")),
+                       If(lambda ctx: ctx['version'] >= 0x20400, UBInt64("execSegBase")),
+                       If(lambda ctx: ctx['version'] >= 0x20400, UBInt64("execSegLimit")),
+                       If(lambda ctx: ctx['version'] >= 0x20400, UBInt64("execSegFlags")),
+                       Pointer(lambda ctx: ctx['cd_start'] - 8 + ctx['teamIDOffset'], CString('teamID')),
                        Pointer(lambda ctx: ctx['cd_start'] - 8 + ctx['hashOffset'] - ctx['hashSize'] * ctx['nSpecialSlots'], Hashes)
                        )
 
